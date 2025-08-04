@@ -2,6 +2,9 @@ import torch
 import torch.nn as nn
 import math
 
+#https://github.com/shubhamprasad0/transformer-from-scratch/tree/main/src
+#https://www.youtube.com/watch?v=U0s0f995w14 (min 35)
+
 class TextEmbedder(nn.Module):
     def __init__(self, embed_length = 512, max_length = 100):  
         super().__init__()
@@ -62,14 +65,129 @@ class TextEmbedder(nn.Module):
         return embedded + pos_encoded
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, head_dim, heads):
-        pass
+    def __init__(self, embed_dim, num_heads):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
 
+        assert embed_dim % num_heads == 0
+
+        self.query_linear = nn.Linear(embed_dim, embed_dim)
+        self.key_linear = nn.Linear(embed_dim, embed_dim)
+        self.value_linear = nn.Linear(embed_dim, embed_dim)
+
+        self.final_linear = nn.Linear(embed_dim, embed_dim)
+        self.scale_factor = math.sqrt(self.head_dim)
+
+    def scaled_dot_product_attention(self, q, k, v, mask=None):
+        # q, k, v shave hape: [batch_size, num_heads, seq_len, head_dim]
+        scores = torch.matmul(q, k.transpose(-2, -1)) / self.scale_factor
+        # now shape: [batch_size, num_heads, seq_len, seq_len]
+
+        if mask is not None:
+            scores = scores.masked_fill(mask == 0, -1e9) # fills masked positions with attention = -1e9 ≈ 0
+
+        attention_weights = nn.functional.softmax(scores, dim=-1)
+
+        return torch.matmul(attention_weights, v) # outputted shape: [batch_size, num_heads, seq_len, head_dim]
+
+    def forward(self, q, k, v, mask=None): # inputted shape: [batch_size, seq_len, embed_dim]
+        batch_size, seq_len, embed_dim = k.shape
+
+        q = self.query_linear(q)
+        k = self.key_linear(k)
+        v = self.value_linear(v)
+
+        # splits the data into heads
+        q = q.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        k = k.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        v = v.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        # shape after transpose is: [batch_size, num_heads, seq_len, head_dim]
+
+
+        attention_output = self.scaled_dot_product_attention(q, k, v, mask)
+
+        attention_output = attention_output.transpose(1, 2).contiguous().view(
+            batch_size, seq_len, embed_dim)
+        # shape is now back to: [batch_size, seq_len, embed_dim = num_heads * head_dim]
+        
+        return self.final_linear(attention_output)
+    
+#dff stands for dimension of feed forward
 class Encoder(nn.Module):
-    pass
+    def __init__(self, embed_dim, num_heads, d_ff, dropout=0.1): 
+        super.__init__()
+        self.multi_head_attn = MultiHeadAttention(embed_dim, num_heads) 
+        self.dropout1 = nn.Dropout(dropout)
+        self.norm1 = nn.LayerNorm(normalized_shape=embed_dim) 
+        # each token is represented by a vector of length embed_dim, so LayerNorm normalizes the values within each token vector
+        self.feed_forward = nn.Sequential(
+            nn.Linear(embed_dim, d_ff), 
+            nn.Relu(),
+            nn.Dropout(dropout),
+            nn.Linear(d_ff, embed_dim),
+            nn.Dropout(dropout)
+        )
+        self.norm2 = nn.LayerNorm(normalized_shape=embed_dim)
 
+    def forward(self, x):
+        attn = self.multi_head_attn(x, x, x)  # x shape is [batch_size, seq_len, embed_dim]
+        x = self.norm1(x + self.dropout1(attn))
+        ff_out = self.feed_forward(x)
+        x = self.norm2(x + self.dropout2(ff_out))
+
+        return x 
+
+        
 class Decoder(nn.Module):
-    pass 
+    def __init__(self, embed_dim, num_heads, d_ff, dropout=0.1): 
+        super.__init__()
+        self.self_attn = MultiHeadAttention(embed_dim, num_heads)
+        self.dropout1 = nn.Dropout(dropout)
+        self.norm1 = nn.LayerNorm(embed_dim)
+
+        self.cross_attn = MultiHeadAttention(embed_dim, num_heads)
+        self.dropout2 = nn.Dropout(dropout)
+        self.norm2 = nn.LayerNorm(embed_dim)
+
+        self.feed_forward = nn.Sequential(
+            nn.Linear(embed_dim, d_ff), 
+            nn.Relu(), 
+            nn.Dropout(dropout),
+            nn.Linear(d_ff, embed_dim),
+            nn.Dropout(dropout)
+        )
+
+        self.norm3 = nn.LayerNorm(embed_dim)
+
+    def forward(self, x, enc_out, mask=None): 
+        self_attn = self.self_attn(x, x, x)
+        x = self.norm1(x + self.dropout1(self_attn))
+
+        cross_attn = self.cross_attn(x, enc_out, enc_out, mask=mask)
+        x = self.norm2(x + self.dropout2(cross_attn))
+        
+        ff_out = self.feed_forward(x)
+        x = self.norm3(x + ff_out)
+
+        return x
 
 class Transformer(nn.Module):
-    pass
+    def __init__(self): 
+        super.__init__()
+
+    def generate_auto_regressive_mask(): 
+        pass
+
+    def forward(self): 
+        pass
+
+def main():
+    embedded_text = TextEmbedder.embed_and_encode(sentence="gigityhghghg this is a test")
+    print("embedded shape:", embedded_text.shape)
+    attention_text = MultiHeadAttention.forward(x=embedded_text)
+    print("attention output shape:", attention_text.shape)
+
+if __name__ == '__main__':
+    main()
