@@ -88,7 +88,7 @@ class MultiHeadAttention(nn.Module):
         if mask is not None:
             scores = scores.masked_fill(mask == 0, -1e9) # fills masked positions with attention = -1e9 ≈ 0
 
-        attention_weights = nn.functional.softmax(scores, dim=-1)
+        attention_weights = nn.functional.softmax(scores, dim=-1) # softmax across the last dimension (across key positions)
 
         return torch.matmul(attention_weights, v) # outputted shape: [batch_size, num_heads, seq_len, head_dim]
 
@@ -109,15 +109,15 @@ class MultiHeadAttention(nn.Module):
         attention_output = self.scaled_dot_product_attention(q, k, v, mask)
 
         attention_output = attention_output.transpose(1, 2).contiguous().view(
-            batch_size, seq_len, embed_dim)
+            batch_size, seq_len, embed_dim) # concatenates heads back together
         # shape is now back to: [batch_size, seq_len, embed_dim = num_heads * head_dim]
         
-        return self.final_linear(attention_output)
+        return self.final_linear(attention_output) # learns how to combine info from all heads
     
-#dff stands for dimension of feed forward
+# dff stands for dimension of feed forward
 class Encoder(nn.Module):
     def __init__(self, embed_dim, num_heads, d_ff, dropout=0.1): 
-        super.__init__()
+        super().__init__()
         self.multi_head_attn = MultiHeadAttention(embed_dim, num_heads) 
         self.dropout1 = nn.Dropout(dropout)
         self.norm1 = nn.LayerNorm(normalized_shape=embed_dim) 
@@ -130,9 +130,10 @@ class Encoder(nn.Module):
             nn.Dropout(dropout)
         )
         self.norm2 = nn.LayerNorm(normalized_shape=embed_dim)
+        self.dropout2 = nn.Dropout(dropout)
 
     def forward(self, x):
-        attn = self.multi_head_attn(x, x, x)  # x shape is [batch_size, seq_len, embed_dim]
+        attn = self.multi_head_attn(x, x, x)  # x shape is [batch_size, seq_len, embed_dim]. this uses same imput for q, k, and v
         x = self.norm1(x + self.dropout1(attn))
         ff_out = self.feed_forward(x)
         x = self.norm2(x + self.dropout2(ff_out))
@@ -142,7 +143,7 @@ class Encoder(nn.Module):
         
 class Decoder(nn.Module):
     def __init__(self, embed_dim, num_heads, d_ff, dropout=0.1): 
-        super.__init__()
+        super().__init__()
         self.self_attn = MultiHeadAttention(embed_dim, num_heads)
         self.dropout1 = nn.Dropout(dropout)
         self.norm1 = nn.LayerNorm(embed_dim)
@@ -159,6 +160,7 @@ class Decoder(nn.Module):
             nn.Dropout(dropout)
         )
 
+        self.dropout3 = nn.Dropout(dropout)
         self.norm3 = nn.LayerNorm(embed_dim)
 
     def forward(self, x, enc_out, mask=None): 
@@ -166,10 +168,10 @@ class Decoder(nn.Module):
         x = self.norm1(x + self.dropout1(self_attn))
 
         cross_attn = self.cross_attn(x, enc_out, enc_out, mask=mask)
-        x = self.norm2(x + self.dropout2(cross_attn))
+        x = self.norm2(x + self.dropout2(cross_attn)) # x is what decoder has generated thus far, cross_attn is relevant info from encoder
         
         ff_out = self.feed_forward(x)
-        x = self.norm3(x + ff_out)
+        x = self.norm3(x + self.dropout3(ff_out))
 
         return x
 
