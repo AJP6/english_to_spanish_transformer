@@ -53,7 +53,7 @@ class PositionalEncoding(nn.Module):
 
         return self.register_buffer('pe_mat', pe_mat.unsqueeze(0))
     
-    def __forward__(self, x): 
+    def forward(self, x): 
         return x + self.pe_mat[:, :x.size(1)]
 
 class MultiHeadAttention(nn.Module):
@@ -176,8 +176,8 @@ class Transformer(nn.Module):
         self.padding_idx = padding_idx
 
         #layers 
-        self.encoder_embed = nn.Embedding(src_vocab_size, embed_dim)
-        self.decoder_embed = nn.Embedding(tgt_vocab_size, embed_dim)
+        self.encoder_embed = nn.Embedding(src_vocab_size, embed_dim, padding_idx=padding_idx)
+        self.decoder_embed = nn.Embedding(tgt_vocab_size, embed_dim, padding_idx=padding_idx)
         self.positional_encoder = PositionalEncoding(embed_dim, seq_len)
 
         self.encoder_layers = nn.ModuleList([
@@ -188,33 +188,37 @@ class Transformer(nn.Module):
         ])
         self.dropout = nn.Dropout(dropout)
 
-        #in = [Batch_size, seq_len, embed_dim] -> [batch_size, seq_len, embed_dim]
-        self.final_ff = nn.Linear(embed_dim, tgt_vocab_size)
+        # converts final hidden states back to vocabulary probabilities
+        # [batch_size, seq_len, embed_dim] → [batch_size, seq_len, tgt_vocab_size]
+        self.final_linear_layer = nn.Linear(embed_dim, tgt_vocab_size)
 
     def generate_masks(self, src, tgt): 
         # src mask hides padding tokens from attention in encoder
         src_mask = (src != self.padding_idx).unsqueeze(1).unsqueeze(2) # [batch_size, 1, 1, src_len] needs to match scores = [batch_size, num_heads, seq_len, seq_len]
         tgt_mask_pad = (tgt != self.padding_idx).unsqueeze(1).unsqueeze(2) # [batch_size, 1, 1, tgt_len]
-        tgt_mask_cas = torch.triu(torch.ones(self.seq_len, self.embed_dim)).bool().unsqueeze(0).unsqueeze(0)
+        tgt_mask_cas = torch.tril(torch.ones(tgt.size(1), tgt.size(1))).bool().unsqueeze(0).unsqueeze(0) # tgt.size(1) gets length of tgt seq
+        # we want to create a lower triangular matrix here so that it cant see future tokens
         tgt_mask = tgt_mask_pad & tgt_mask_cas
+        # shape: [batch_size, 1, tgt_len, tgt_len]
 
-        return src_mask, tgt_mask
+        return src_mask, tgt_mask 
 
     def forward(self, src, tgt): 
         src_mask, tgt_mask = self.generate_masks(src, tgt)
 
         src_embed = self.dropout(self.positional_encoder(self.encoder_embed(src)))
         tgt_embed = self.dropout(self.positional_encoder(self.decoder_embed(tgt)))
+        # [batch_size, src_len] -> [batch_size, src_len, embed_dim]
 
+        enc_out = src_embed
         for encoder_layer in self.encoder_layers:
-            src_embed = encoder_layer()
+            enc_out = encoder_layer(enc_out) 
 
+        dec_out = tgt_embed
         for decoder_layer in self.decoder_layers:
-            pass
+            dec_out = decoder_layer(dec_out, enc_out, src_mask)
 
-
-        
-
+        return self.final_linear_layer(dec_out) # outputs shape: [batch_size, tgt_len, tgt_vocab_size]
 
 def main():
     pass
