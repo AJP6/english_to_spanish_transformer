@@ -5,24 +5,16 @@ import math
 #https://github.com/shubhamprasad0/transformer-from-scratch/tree/main/src
 #https://www.youtube.com/watch?v=U0s0f995w14 (min 35)
 
-class TextEmbedder(nn.Module):
-    def __init__(self, embed_length = 512, max_length = 100):  
-        super().__init__()
-        self.embed_length = embed_length
+
+class Tokenizer():
+    def __init__(self, max_length=100):  
         self.max_length = max_length
         self.pad_token = '<pad>'
-        self.unknown_token = '<unc>'
+        self.unknown_token = '<unk>'
         self.vocab = dict()
         self.reverse_vocab = dict() 
 
-        self.embedding = None
-
-        pe = self.positional_encoding(max_length, embed_length)
-        self.register_buffer('pos_encoding', pe)  # shape: [1, max_len, embed_len]
-        # we were recalculating pos encodings with each run, which is bad
-        # register-buffer wont be updated with grad desc because pos encodings are fixed not learned
-
-    def fit(self, sentences: list[str]): 
+    def fit(self, sentences): 
         token_set = set()
         for s in sentences: 
             tokens = s.lower().split()
@@ -32,9 +24,10 @@ class TextEmbedder(nn.Module):
         self.vocab = {tok: i for i, tok in enumerate(sorted(token_set))} # sorted this cause otherwise we'd get different token mapping each time
         self.reverse_vocab = {i: tok for tok, i in self.vocab.items()} # maps integer ID back to token
         self.vocab_size = len(self.vocab)
-        self.embedding = nn.Embedding(self.vocab_size, self.embed_length)
+        self.padding_idx = self.vocab['<pad>']
+        self.embedding = nn.Embedding(self.vocab_size, self.embed_length, padding_idx=self.padding_idx)
 
-    def embed(self, sentence):
+    def tokenize(self, sentence):
         tokens = sentence.lower().split()
         token_ids = [self.vocab.get(token, self.vocab[self.unknown_token]) for token in tokens] 
 
@@ -46,23 +39,22 @@ class TextEmbedder(nn.Module):
             token_ids.extend([pad_id] * (self.max_length - len(token_ids)))
 
         return torch.tensor(token_ids).unsqueeze(0) # shape here is [1, seq_len]
-    
-    def positional_encoding(self, max_len, embed_len):
-        pe = torch.zeros(max_len, embed_len)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+
+class PositionalEncoding(nn.Module): 
+    def __init__(self, embed_len, max_seq_len): 
+        super().__init__()
+
+        pe_mat = torch.zeros(max_seq_len, embed_len)
+        position = torch.arange(0, max_seq_len, dtype=torch.float).unsqueeze(1)
         div_term = torch.exp(torch.arange(0, embed_len, 2).float() * (-math.log(10000.0) / embed_len))
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        return pe.unsqueeze(0) # shape here is [1, max_len, embed_len]
+
+        pe_mat[:, 0::2] = torch.sin(position * div_term)
+        pe_mat[:, 1::2] = torch.cos(position * div_term)
+
+        return self.register_buffer('pe_mat', pe_mat.unsqueeze(0))
     
-    def embed_and_encode(self, sentence):
-        if self.embedding is None:
-            raise ValueError("model needs to be fitted with training data before you can embed, so gotta call fit() first.")
-        
-        tokens_in_tensor = self.embed(sentence) # shape: [1 seq_len]
-        embedded = self.embedding(tokens_in_tensor) # shape: [1, seq_len, embed_dim]
-        pos_encoded = self.pos_encoding[:, :embedded.size(1), :] # shape: [1, seq_len, embed_dim]
-        return embedded + pos_encoded
+    def __forward__(self, x): 
+        return x + self.pe_mat[:, :x.size(1)]
 
 class MultiHeadAttention(nn.Module):
     def __init__(self, embed_dim, num_heads):
@@ -81,7 +73,7 @@ class MultiHeadAttention(nn.Module):
         self.scale_factor = math.sqrt(self.head_dim)
 
     def scaled_dot_product_attention(self, q, k, v, mask=None):
-        # q, k, v shave hape: [batch_size, num_heads, seq_len, head_dim]
+        # q, k, v shape have: [batch_size, num_heads, seq_len, head_dim]
         scores = torch.matmul(q, k.transpose(-2, -1)) / self.scale_factor
         # now shape: [batch_size, num_heads, seq_len, seq_len]
 
@@ -176,20 +168,43 @@ class Decoder(nn.Module):
         return x
 
 class Transformer(nn.Module):
-    def __init__(self): 
-        super.__init__()
+    def __init__(self, seq_len, embed_dim, src_vocab_size, tgt_vocab_size, padding_idx, dropout=0.01): 
+        super().__init__()
+        #parameters
+        self.embed_dim = embed_dim
+        self.seq_len = seq_len
+        self.padding_idx = padding_idx
 
-    def generate_auto_regressive_mask(): 
-        pass
+        #layers 
+        self.encoder_embed = nn.Embedding(src_vocab_size, embed_dim)
+        self.decoder_embed = nn.Embedding(tgt_vocab_size, embed_dim)
+        self.positional_encoder = PositionalEncoding(embed_dim, seq_len)
+
+        self.encoder_layers = nn.ModuleList([
+            Encoder(embed_dim, 8, embed_dim * 2 ) for _ in range(7)
+        ])
+        self.decoder_layers = nn.ModuleList([
+            Decoder(embed_dim, 8, embed_dim * 2) for _ in range(7)
+        ])
+        self.dropout = nn.Dropout(dropout)
+
+        self.final_ff(embed_dim, tgt_vocab_size)
+
+    def generate_masks(self, src, tgt): 
+        # src mask hides padding tokens from attention in encoder
+        src_mask = (src != self.padding_idx).unsqueeze(1).unsqueeze(2) # [batch_size, 1, 1, src_len] needs to match scores = [batch_size, num_heads, seq_len, seq_len]
+        tgt_mask_pad = (tgt != self.padding_idx).unsqueeze(1).unsqueeze(2) # [batch_size, 1, 1, tgt_len]
+        tgt_mask_cas = torch.triu(torch.ones(self.seq_len, self.embed_dim)).bool().unsqueeze(0).unsqueeze(0)
+        tgt_mask = tgt_mask_pad & tgt_mask_cas
+
+        return src_mask, tgt_mask
 
     def forward(self): 
         pass
 
+
 def main():
-    embedded_text = TextEmbedder.embed_and_encode(sentence="gigityhghghg this is a test")
-    print("embedded shape:", embedded_text.shape)
-    attention_text = MultiHeadAttention.forward(x=embedded_text)
-    print("attention output shape:", attention_text.shape)
+    pass
 
 if __name__ == '__main__':
     main()
