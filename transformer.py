@@ -188,7 +188,8 @@ class Transformer(nn.Module):
         ])
         self.dropout = nn.Dropout(dropout)
 
-        self.final_ff(embed_dim, tgt_vocab_size)
+        #in = [Batch_size, seq_len, embed_dim] -> [batch_size, seq_len, embed_dim]
+        self.final_ff = nn.Linear(embed_dim, tgt_vocab_size)
 
     def generate_masks(self, src, tgt): 
         # src mask hides padding tokens from attention in encoder
@@ -199,8 +200,20 @@ class Transformer(nn.Module):
 
         return src_mask, tgt_mask
 
-    def forward(self): 
-        pass
+    def forward(self, src, tgt): 
+        src_mask, tgt_mask = self.generate_masks(src, tgt)
+
+        src_embed = self.dropout(self.positional_encoder(self.encoder_embed(src)))
+        tgt_embed = self.dropout(self.positional_encoder(self.decoder_embed(tgt)))
+
+        for encoder_layer in self.encoder_layers:
+            src_embed = encoder_layer()
+
+        for decoder_layer in self.decoder_layers:
+            pass
+
+
+        
 
 
 def main():
