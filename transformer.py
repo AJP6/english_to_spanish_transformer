@@ -25,7 +25,6 @@ class Tokenizer():
         self.reverse_vocab = {i: tok for tok, i in self.vocab.items()} # maps integer ID back to token
         self.vocab_size = len(self.vocab)
         self.padding_idx = self.vocab['<pad>']
-        self.embedding = nn.Embedding(self.vocab_size, self.embed_length, padding_idx=self.padding_idx)
 
     def tokenize(self, sentence):
         tokens = sentence.lower().split()
@@ -51,7 +50,7 @@ class PositionalEncoding(nn.Module):
         pe_mat[:, 0::2] = torch.sin(position * div_term)
         pe_mat[:, 1::2] = torch.cos(position * div_term)
 
-        return self.register_buffer('pe_mat', pe_mat.unsqueeze(0))
+        self.register_buffer('pe_mat', pe_mat.unsqueeze(0))
     
     def forward(self, x): 
         return x + self.pe_mat[:, :x.size(1)]
@@ -116,7 +115,7 @@ class Encoder(nn.Module):
         # each token is represented by a vector of length embed_dim, so LayerNorm normalizes the values within each token vector
         self.feed_forward = nn.Sequential(
             nn.Linear(embed_dim, d_ff), 
-            nn.Relu(),
+            nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(d_ff, embed_dim),
             nn.Dropout(dropout)
@@ -124,8 +123,8 @@ class Encoder(nn.Module):
         self.norm2 = nn.LayerNorm(normalized_shape=embed_dim)
         self.dropout2 = nn.Dropout(dropout)
 
-    def forward(self, x):
-        attn = self.multi_head_attn(x, x, x)  # x shape is [batch_size, seq_len, embed_dim]. this uses same imput for q, k, and v
+    def forward(self, x, mask=None):
+        attn = self.multi_head_attn(x, x, x, mask=mask)  # x shape is [batch_size, seq_len, embed_dim]. this uses same imput for q, k, and v
         x = self.norm1(x + self.dropout1(attn))
         ff_out = self.feed_forward(x)
         x = self.norm2(x + self.dropout2(ff_out))
@@ -146,7 +145,7 @@ class Decoder(nn.Module):
 
         self.feed_forward = nn.Sequential(
             nn.Linear(embed_dim, d_ff), 
-            nn.Relu(), 
+            nn.ReLU(), 
             nn.Dropout(dropout),
             nn.Linear(d_ff, embed_dim),
             nn.Dropout(dropout)
@@ -155,11 +154,11 @@ class Decoder(nn.Module):
         self.dropout3 = nn.Dropout(dropout)
         self.norm3 = nn.LayerNorm(embed_dim)
 
-    def forward(self, x, enc_out, mask=None): 
-        self_attn = self.self_attn(x, x, x)
+    def forward(self, x, enc_out, src_mask=None, tgt_mask=None): 
+        self_attn = self.self_attn(x, x, x, mask=tgt_mask)
         x = self.norm1(x + self.dropout1(self_attn))
 
-        cross_attn = self.cross_attn(x, enc_out, enc_out, mask=mask)
+        cross_attn = self.cross_attn(x, enc_out, enc_out, mask=src_mask)
         x = self.norm2(x + self.dropout2(cross_attn)) # x is what decoder has generated thus far, cross_attn is relevant info from encoder
         
         ff_out = self.feed_forward(x)
@@ -196,7 +195,7 @@ class Transformer(nn.Module):
         # src mask hides padding tokens from attention in encoder
         src_mask = (src != self.padding_idx).unsqueeze(1).unsqueeze(2) # [batch_size, 1, 1, src_len] needs to match scores = [batch_size, num_heads, seq_len, seq_len]
         tgt_mask_pad = (tgt != self.padding_idx).unsqueeze(1).unsqueeze(2) # [batch_size, 1, 1, tgt_len]
-        tgt_mask_cas = torch.tril(torch.ones(tgt.size(1), tgt.size(1))).bool().unsqueeze(0).unsqueeze(0) # tgt.size(1) gets length of tgt seq
+        tgt_mask_cas = torch.tril(torch.ones(tgt.size(1), tgt.size(1), device=tgt.device)).bool().unsqueeze(0).unsqueeze(0) # tgt.size(1) gets length of tgt seq
         # we want to create a lower triangular matrix here so that it cant see future tokens
         tgt_mask = tgt_mask_pad & tgt_mask_cas
         # shape: [batch_size, 1, tgt_len, tgt_len]
@@ -212,11 +211,11 @@ class Transformer(nn.Module):
 
         enc_out = src_embed
         for encoder_layer in self.encoder_layers:
-            enc_out = encoder_layer(enc_out) 
+            enc_out = encoder_layer(enc_out, mask=src_mask) 
 
         dec_out = tgt_embed
         for decoder_layer in self.decoder_layers:
-            dec_out = decoder_layer(dec_out, enc_out, src_mask)
+            dec_out = decoder_layer(dec_out, enc_out, src_mask=src_mask, tgt_mask=tgt_mask)
 
         return self.final_linear_layer(dec_out) # outputs shape: [batch_size, tgt_len, tgt_vocab_size]
 
