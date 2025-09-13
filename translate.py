@@ -26,7 +26,7 @@ def make_model(src_vocab_size, tgt_vocab_size, padding_idx, seq_len=30, embed_di
 
 def translate(src_sentence, transformer, src_tokenizer, tgt_tokenizer, max_len=30):
     # tokenize the input sentence
-    src_tokens = src_tokenizer.tokenize(f"<bos> {src_sentence} <eos>").to(DEVICE)
+    src_tokens = src_tokenizer.tokenize(f"<bos> {src_sentence} <eos>").unsqueeze(0).to(DEVICE)
     tgt_tokens = [tgt_tokenizer.vocab['<bos>']] # greedy decoding will generate one token at a time starting from this
 
     for _ in range(max_len):
