@@ -11,6 +11,8 @@ class Tokenizer():
         self.max_length = max_length
         self.pad_token = '<pad>'
         self.unknown_token = '<unk>'
+        self.beg_sentence = '<bos>'
+        self.end_sentence = '<eos>'
         self.vocab = dict()
         self.reverse_vocab = dict() 
 
@@ -20,7 +22,13 @@ class Tokenizer():
             tokens = s.lower().split()
             token_set.update(tokens)
 
-        token_set.update([self.unknown_token, self.pad_token])
+        token_set.update([
+            self.unknown_token, 
+            self.pad_token,
+            self.end_sentence, 
+            self.beg_sentence
+        ])
+
         self.vocab = {tok: i for i, tok in enumerate(sorted(token_set))} # sorted this cause otherwise we'd get different token mapping each time
         self.reverse_vocab = {i: tok for tok, i in self.vocab.items()} # maps integer ID back to token
         self.vocab_size = len(self.vocab)
@@ -37,7 +45,7 @@ class Tokenizer():
             pad_id = self.vocab[self.pad_token]
             token_ids.extend([pad_id] * (self.max_length - len(token_ids)))
 
-        return torch.tensor(token_ids).unsqueeze(0) # shape here is [1, seq_len]
+        return torch.tensor(token_ids) # shape here is [seq_len] (we're not using .unsqueeze(1))
 
 class PositionalEncoding(nn.Module): 
     def __init__(self, embed_len, max_seq_len): 
@@ -167,7 +175,7 @@ class Decoder(nn.Module):
         return x
 
 class Transformer(nn.Module):
-    def __init__(self, seq_len, embed_dim, src_vocab_size, tgt_vocab_size, padding_idx, dropout=0.01): 
+    def __init__(self, seq_len, embed_dim, src_vocab_size, tgt_vocab_size, padding_idx, dropout=0.1): 
         super().__init__()
         #parameters
         self.embed_dim = embed_dim
@@ -218,9 +226,3 @@ class Transformer(nn.Module):
             dec_out = decoder_layer(dec_out, enc_out, src_mask=src_mask, tgt_mask=tgt_mask)
 
         return self.final_linear_layer(dec_out) # outputs shape: [batch_size, tgt_len, tgt_vocab_size]
-
-def main():
-    pass
-
-if __name__ == '__main__':
-    main()
